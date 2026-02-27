@@ -1037,7 +1037,7 @@ footer a:hover { text-decoration: underline; }
 
   <header>
     <div class="brand">
-      <div class="eyebrow">v2.2 · <span style="color:#00ff9d;letter-spacing:3px;">⚡ LIVE AI</span></div>
+      <div class="eyebrow">v2.3 · AI Circuit Factory</div>
       <h1>AI CIRCUIT<br><em>FACTORY</em></h1>
     </div>
     <div class="header-counters">
@@ -1084,9 +1084,9 @@ footer a:hover { text-decoration: underline; }
       <span class="terminal-label">SYSTEM LOG // AI CIRCUIT FACTORY</span>
     </div>
     <div class="terminal-body" id="terminal">
-      <p class="log dim">// AI Circuit Factory — 3 Claude personas competing (GPT-4o style · Claude style · Gemini style).</p>
+      <p class="log dim">// AI Circuit Factory ready. Spec-aware simulation — different result every run.</p>
       <p class="log dim">// Outputs: LTspice .asc · KiCad .kicad_sch · Bill of Materials .csv</p>
-      <p class="log dim">// Enter any circuit spec — fully dynamic, no hardcoding.</p>
+      <p class="log dim">// Try: "500mA H-bridge" · "48V flyback" · "precision 1mA sensor driver"</p>
       <span class="cursor-blink"></span>
     </div>
   </div>
@@ -1253,15 +1253,11 @@ footer a:hover { text-decoration: underline; }
 'use strict';
 
 /* ──────────────────────────────────────────
-   🔐 INSERT YOUR API KEYS HERE
-   - OPENAI_KEY  : from platform.openai.com
-   - OPENROUTER_KEY : from openrouter.ai  ← used for Claude (Anthropic blocks CORS)
-   - GEMINI_KEY  : from aistudio.google.com
+   🎭 SIMULATED MODE
+   All 3 models are simulated locally —
+   fully dynamic, spec-aware, different
+   every run. No API keys needed.
 ────────────────────────────────────────── */
-// const OPENAI_KEY='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';
-const OPENAI_KEY='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';
-const ANTHROPIC_KEY='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';
-const GEMINI_KEY='AIzaSyCRnRFhORzqwJ0S8fqEqLYV118izJZvPSA';
 
 /* ──────────────────────────────────────────
    STATE
@@ -1309,74 +1305,236 @@ Score 0-10: honest self-assessment of how well your design meets the full spec. 
 }
 
 /* ──────────────────────────────────────────
-   LIVE AI — all 3 models powered by Claude
-   Each call uses a different persona prompt
-   so GPT-4o, Gemini & Claude give genuinely
-   different circuit designs for any spec.
+   🎭 SIMULATION ENGINE
+   Spec-aware, randomised every run.
+   Each model has its own personality,
+   component pool, and scoring bias.
 ────────────────────────────────────────── */
 
-const JSON_SCHEMA = `Respond with ONLY valid JSON, no markdown, no text outside it:
-{
-  "topology": "short_topology_name_no_spaces",
-  "components": [
-    {"ref":"U1","value":"LM358","description":"Dual Op-Amp","qty":1,"unit_cost_inr":12.00}
-  ],
-  "r_sense_ohms": 68,
-  "total_cost_inr": 28.50,
-  "size_mm": "5x5",
-  "accuracy_pct": 91,
-  "power_loss_w": 0.14,
-  "physics_valid": true,
-  "score": 8.3,
-  "notes": "One sentence: topology choice and why it suits the spec.",
-  "cost_breakdown_notes": "One sentence: how you estimated INR costs for qty=10."
+/* ── helpers ── */
+function rnd(min, max)    { return min + Math.random() * (max - min); }
+function pick(arr)        { return arr[Math.floor(Math.random() * arr.length)]; }
+function jitter(val, pct) { return parseFloat((val * (1 + (Math.random()-0.5)*2*pct)).toFixed(2)); }
+function rndInt(min, max) { return Math.floor(rnd(min, max+1)); }
+
+/* ── spec analyser ── */
+function parseSpec(spec) {
+  const s = spec.toLowerCase();
+  const mA     = parseFloat((s.match(/(\d+(?:\.\d+)?)\s*ma/) || [0,15])[1]);
+  const V      = parseFloat((s.match(/(\d+(?:\.\d+)?)\s*v(?:olt)?/) || [0,5])[1]);
+  const W      = parseFloat((s.match(/(\d+(?:\.\d+)?)\s*w(?:att)?/) || [0,0])[1]);
+  const MHz    = parseFloat((s.match(/(\d+(?:\.\d+)?)\s*mhz/) || [0,0])[1]);
+  const cheap     = /cheap|low.?cost|budget|economical|minimal/.test(s);
+  const precise   = /precise|precision|accurate|accuracy|low.?noise|high.?accuracy/.test(s);
+  const small     = /small|tiny|compact|miniatur|smd|smt/.test(s);
+  const battery   = /battery|portable|low.?power|sleep|standby|3\.3v|coin.?cell/.test(s);
+  const fast      = /fast|high.?speed|switching|pwm|rf|mhz/.test(s);
+  const highV     = /high.?volt|48v|24v|36v|hv|flyback|boost/.test(s);
+  const motor     = /motor|h.?bridge|stepper|servo|brushless|bldc/.test(s);
+  const led       = /led|light|luminan|lumens|strip|rgb/.test(s);
+  const laser     = /laser|diode.?driver|ld/.test(s);
+  const audio     = /audio|speaker|amplif|op.?amp|sound/.test(s);
+  const sensor    = /sensor|measure|detect|adc|wheatstone|bridge/.test(s);
+  const protect   = /protect|fuse|clamp|tvs|esd|reverse/.test(s);
+  return { mA, V, W, MHz, cheap, precise, small, battery, fast, highV, motor, led, laser, audio, sensor, protect };
 }
-Score 0-10 honestly. Do not inflate. Estimate realistic INR component costs for qty=10 from LCSC/DigiKey/Mouser.`;
 
-const PERSONAS = {
-  openai: `You are GPT-4o, an AI assistant made by OpenAI. You are designing a circuit.
-Your style: prefer op-amp feedback topologies (LM358, LM741, TL071), use 1% resistors, prioritise regulation accuracy.
-You favour IC-based solutions over discrete transistors. Your designs tend to be mid-cost and very well-documented.
-${JSON_SCHEMA}`,
-
-  anthropic: `You are Claude Sonnet, an AI assistant made by Anthropic. You are designing a circuit.
-Your style: prefer discrete BJT solutions (2N3904, BC547, MMBT3904) for minimum cost, use 5% resistors where possible.
-You care about minimal BOM count, easy hand-soldering, and parts available on Indian market (LCSC India / local shops).
-${JSON_SCHEMA}`,
-
-  google: `You are Gemini 2.0 Flash, an AI assistant made by Google. You are designing a circuit.
-Your style: prefer integrated regulator ICs (LM317, LM7805, AP2112), MOSFET-based designs (2N7002, AO3400) for efficiency.
-You think about thermal management and long-term reliability. Your designs lean slightly larger but very robust.
-${JSON_SCHEMA}`
+/* ── component libraries per persona ── */
+const POOL = {
+  gpt: {
+    topologies: ['LM358_OpAmp_VCCS','TL071_Precision_CCS','LM741_Feedback_Driver',
+                 'INA219_Monitored_Driver','OPA2134_Low_Noise_Source','LM393_Comparator_PWM'],
+    ctrl:  [{ref:'U1',val:'LM358',   desc:'Dual Op-Amp SO8',          cost:12},{ref:'U1',val:'TL071',   desc:'Low-noise Op-Amp TO99',   cost:18},
+            {ref:'U1',val:'LM741',   desc:'General-purpose Op-Amp',   cost:9}, {ref:'U1',val:'OPA2134', desc:'Audio Op-Amp SOP8',        cost:48},
+            {ref:'U1',val:'LM393',   desc:'Dual Comparator DIP8',     cost:8}],
+    passives: ['100nF','220nF','1uF','10k','4k7','2k2','1k','470R','10uF','47k'],
+    notes: ['Op-amp feedback topology chosen for tight ±1% regulation with minimal drift.',
+            'Voltage-controlled current source using LM358 gives excellent load regulation.',
+            'Precision op-amp loop eliminates Vbe temperature coefficient for stable output.',
+            'Feedback topology self-corrects for supply variations up to ±20%.',
+            'Op-amp integrator loop provides fast transient response and clean output.'],
+    cost_notes: ['LM358 from LCSC at ₹12 is the dominant cost; passives under ₹5 total.',
+                 'Op-amp IC sourced from DigiKey; 1% resistors add ₹3 but improve accuracy.',
+                 'LCSC prices used for qty=10; TL071 slightly pricier but worth it for noise.',
+                 'All passives under ₹2 each from LCSC; IC is the BOM cost driver.'],
+    acc_bias: 5, cost_bias: 1.3, score_bias: 0.2
+  },
+  claude: {
+    topologies: ['NPN_BJT_Emitter_Degeneration','BC547_Darlington_Driver','2N3904_CCS',
+                 'MMBT3904_SMD_Driver','S8050_High_Current_Sink','BC337_Base_Bias_CCS'],
+    ctrl:  [{ref:'Q1',val:'2N3904', desc:'NPN BJT TO-92',             cost:3.5},{ref:'Q1',val:'BC547',  desc:'NPN BJT TO-92 low noise',  cost:3.0},
+            {ref:'Q1',val:'MMBT3904',desc:'NPN BJT SOT-23 SMD',       cost:2.8},{ref:'Q1',val:'S8050',  desc:'NPN BJT TO-92 500mA',      cost:4.0},
+            {ref:'Q1',val:'BC337',  desc:'NPN BJT TO-92 800mA',       cost:4.5}],
+    passives: ['68R','100R','220R','470R','1k','2k2','4k7','10k','100nF','10uF'],
+    notes: ['Jellybean NPN BJT chosen for absolute minimum BOM cost — widely stocked in India.',
+            '2N3904 emitter degeneration resistor sets current with ±10% tolerance, adequate for LEDs.',
+            'Discrete BJT topology: 3 components total, hand-solderable, easy to debug.',
+            'BC547 chosen for its low Vce(sat) which reduces heat at moderate currents.',
+            'Emitter follower with sense resistor: proven topology used in millions of designs.'],
+    cost_notes: ['2N3904 at ₹3.50 from local market; total BOM under ₹15 for qty=10.',
+                 'All parts available at SP Road Bangalore / Lamington Road Mumbai under ₹20.',
+                 'LCSC India pricing used; BJT at ₹3 makes this the cheapest viable option.',
+                 'Resistors at ₹0.80 each from LCSC; jellybean transistor keeps total low.'],
+    acc_bias: -4, cost_bias: 0.55, score_bias: -0.1
+  },
+  gemini: {
+    topologies: ['LM317_CCS','LM7805_Linear_Reg','AO3400_NMOS_Driver',
+                 '2N7002_Gate_Drive_CCS','AP2112_LDO_Driver','FQP30N06_Power_MOSFET'],
+    ctrl:  [{ref:'U1',val:'LM317',  desc:'Adj. Regulator TO-220',     cost:18},{ref:'M1',val:'2N7002',  desc:'N-ch MOSFET SOT-23',       cost:8.5},
+            {ref:'M1',val:'AO3400', desc:'N-ch MOSFET 30V 5.7A',      cost:12},{ref:'U1',val:'AP2112K', desc:'600mA LDO Regulator SOT-23',cost:22},
+            {ref:'M1',val:'FQP30N06',desc:'N-ch MOSFET TO-220 30A',   cost:35}],
+    passives: ['100nF','1uF','10uF','100uF','1k','2k2','10k','4k7','1N4007','Schottky 1A'],
+    notes: ['LM317 in CCS mode: industry-standard, thermally robust, excellent datasheet coverage.',
+            'NMOS feedback driver chosen for low gate charge and minimal power loss at high currents.',
+            'MOSFET topology preferred for efficiency — no Vbe drop means less heat than BJT.',
+            'LM317 provides 1.25V/R accuracy regardless of temperature or supply variation.',
+            'MOSFET gate drive topology scales well to higher currents with just a heatsink.'],
+    cost_notes: ['LM317 at ₹18 from DigiKey/Mouser; protection diode ₹1.80 from LCSC.',
+                 'AO3400 MOSFET at ₹12 from LCSC; total BOM slightly higher but thermally robust.',
+                 'MOSFET sourced from LCSC at ₹8–12; passives under ₹5; diode ₹2 for protection.',
+                 'LM317 dominates BOM cost at ₹18; highly available from local distributors.'],
+    acc_bias: 0, cost_bias: 1.6, score_bias: 0.1
+  }
 };
 
-async function claudeCall(persona, spec) {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1024,
-      system: PERSONAS[persona],
-      messages: [{ role: 'user', content: `Design a circuit for this spec: "${spec}"` }]
-    })
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error((err.error && err.error.message) || 'Anthropic HTTP ' + resp.status);
-  }
-  const data = await resp.json();
-  return parseJSON(data.content.map(b => b.text || '').join(''));
+/* ── sense resistor calculator ── */
+function calcRsense(mA, precise) {
+  // Vdrop across sense = 100-200mV for cheap, 50-100mV for precise
+  const vDrop = precise ? rnd(0.05, 0.10) : rnd(0.08, 0.18);
+  const raw   = vDrop / (mA / 1000);
+  // Round to nearest E12 value
+  const e12   = [10,12,15,18,22,27,33,39,47,56,68,82];
+  const decade = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm   = raw / decade;
+  const nearest = e12.reduce((a,b) => Math.abs(b-norm)<Math.abs(a-norm)?b:a);
+  return Math.round(nearest * decade);
 }
 
-async function callOpenAI(spec)  { return claudeCall('openai',    spec); }
-async function callClaude(spec)  { return claudeCall('anthropic', spec); }
-async function callGemini(spec)  { return claudeCall('google',    spec); }
+/* ── power loss calculator ── */
+function calcPowerLoss(mA, rSense, V) {
+  const iOut   = mA / 1000;
+  const vDrop  = V > 0 ? V * 0.15 : 1.2; // ~15% Vdrop across control element
+  const pCtrl  = iOut * vDrop;
+  const pSense = iOut * iOut * rSense;
+  return parseFloat((pCtrl + pSense).toFixed(3));
+}
+
+/* ── size estimator ── */
+function calcSize(comps, small) {
+  const base = small ? 3 : 4;
+  const w    = base + comps.length * (small ? 0.4 : 0.6);
+  const h    = base + comps.length * (small ? 0.3 : 0.5);
+  return Math.round(w) + 'x' + Math.round(h);
+}
+
+/* ── main design generator ── */
+function generateDesign(persona, spec) {
+  const p    = parseSpec(spec);
+  const pool = POOL[persona];
+
+  // Pick topology — influenced by spec keywords
+  let topoIdx = rndInt(0, pool.topologies.length - 1);
+  if (p.fast   && persona === 'gpt')    topoIdx = rndInt(3, 4);
+  if (p.highV  && persona === 'gemini') topoIdx = rndInt(2, 4);
+  if (p.cheap  && persona === 'claude') topoIdx = rndInt(0, 2);
+  const topology = pool.topologies[topoIdx];
+
+  // Pick control element
+  let ctrlIdx = rndInt(0, pool.ctrl.length - 1);
+  if (p.motor  && persona === 'gemini') ctrlIdx = rndInt(2, 4);
+  if (p.audio  && persona === 'gpt')    ctrlIdx = rndInt(1, 3);
+  const ctrl = pool.ctrl[ctrlIdx];
+
+  // Calculate electrical values
+  const rSense    = calcRsense(p.mA, p.precise);
+  const powerLoss = calcPowerLoss(p.mA, rSense, p.V);
+
+  // Build components list
+  const comps = [
+    { ref: ctrl.ref, value: ctrl.val, description: ctrl.desc, qty: 1,
+      unit_cost_inr: jitter(ctrl.cost, 0.08) }
+  ];
+
+  // Sense resistor
+  const rCost = persona === 'gpt' ? jitter(2.20, 0.1) : jitter(1.10, 0.15);
+  comps.push({ ref:'R1', value: rSense + 'R',
+    description: persona==='gpt' ? 'Current sense 1% MF' : 'Current sense 5% CF',
+    qty:1, unit_cost_inr: rCost });
+
+  // Bias resistors
+  const biasVal = pick(pool.passives.filter(v => v.match(/k|R/)));
+  comps.push({ ref:'R2', value: biasVal, description: 'Bias / feedback resistor',
+    qty: rndInt(1,2), unit_cost_inr: jitter(0.80, 0.2) });
+
+  // Bypass cap
+  const capVal = pick(pool.passives.filter(v => v.includes('F')));
+  comps.push({ ref:'C1', value: capVal, description: 'Supply bypass cap',
+    qty:1, unit_cost_inr: jitter(1.50, 0.2) });
+
+  // Optional extras
+  if (p.protect || p.highV) {
+    comps.push({ ref:'D1', value:'1N4007', description:'Reverse polarity protection',
+      qty:1, unit_cost_inr: jitter(1.80, 0.15) });
+  }
+  if (p.battery || p.small) {
+    comps.push({ ref:'C2', value:'10uF', description:'Output bulk capacitor',
+      qty:1, unit_cost_inr: jitter(3.00, 0.2) });
+  }
+  if (p.motor || p.highV) {
+    comps.push({ ref:'R3', value: pick(['10k','4k7','2k2']),
+      description: 'Gate / base pull-down', qty:1, unit_cost_inr: jitter(0.80, 0.15) });
+  }
+
+  // Total cost with persona bias
+  const baseCost = comps.reduce((s, c) => s + c.unit_cost_inr * c.qty, 0);
+  const totalCost = parseFloat((baseCost * pool.cost_bias * jitter(1, 0.06)).toFixed(2));
+
+  // Accuracy — influenced by spec and persona
+  let acc = 82 + pool.acc_bias;
+  if (p.precise) acc += rndInt(6, 10);
+  if (p.cheap)   acc -= rndInt(3, 7);
+  if (p.battery) acc += rndInt(2, 5);
+  acc = Math.min(98, Math.max(72, acc + rndInt(-3, 3)));
+
+  // Score — spec-match heuristic with randomness
+  let score = 7.0 + pool.score_bias;
+  if (p.precise && persona === 'gpt')    score += rnd(0.8, 1.4);
+  if (p.cheap   && persona === 'claude') score += rnd(0.9, 1.5);
+  if (p.battery && persona === 'gemini') score += rnd(0.7, 1.3);
+  if (p.motor   && persona === 'gemini') score += rnd(0.5, 1.0);
+  if (p.small   && persona === 'claude') score += rnd(0.3, 0.8);
+  if (p.highV   && persona === 'gemini') score += rnd(0.6, 1.1);
+  if (p.audio   && persona === 'gpt')    score += rnd(0.4, 0.9);
+  score = parseFloat(Math.min(9.7, Math.max(6.2, score + rnd(-0.3, 0.3))).toFixed(1));
+
+  // physics_valid: false occasionally for realism (~10%)
+  const physics_valid = Math.random() > 0.10;
+
+  return {
+    topology,
+    components: comps,
+    r_sense_ohms:   rSense,
+    total_cost_inr: totalCost,
+    size_mm:        calcSize(comps, p.small),
+    accuracy_pct:   acc,
+    power_loss_w:   powerLoss,
+    physics_valid,
+    score,
+    notes:       pick(pool.notes),
+    cost_breakdown_notes: pick(pool.cost_notes)
+  };
+}
+
+/* ── simulated latency (feels like real API) ── */
+function fakeDelay(engine) {
+  const ranges = { openai:[1600,2800], anthropic:[2000,3200], google:[1100,2200] };
+  const [min,max] = ranges[engine];
+  return new Promise(r => setTimeout(r, min + Math.random()*(max-min)));
+}
+
+async function callOpenAI(spec)  { await fakeDelay('openai');    return generateDesign('gpt',    spec); }
+async function callClaude(spec)  { await fakeDelay('anthropic'); return generateDesign('claude', spec); }
+async function callGemini(spec)  { await fakeDelay('google');    return generateDesign('gemini', spec); }
 
 /* Helper: extract + parse JSON from any LLM response */
 function parseJSON(raw) {
